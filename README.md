@@ -30,3 +30,5 @@ The program can be added to the autoloader, having previously set the parameters
 ```<OutputType>WinExe</OutputType>``` will allow to run the program without console interface.
 
 To place the application in Windows autoloader you need to press ```Win+R```, type: ```shell:startup``` and place a shortcut of ```AnchorPatch.exe``` file from the build folder in the opened folder.
+
+Or you can use the installer from the [release section](https://github.com/Saltant/anchor-patch/releases/latest "Latest Releases"), it will automatically install the patch and add it to autorun.
