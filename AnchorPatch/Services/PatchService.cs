@@ -68,7 +68,7 @@ namespace AnchorPatch.Services
 
         void KillZombieProcesses()
         {
-            foreach (var zombieProcess in processes.Where(x => !anchorProcesses.ContainsKey(x.Id)))
+            foreach (var zombieProcess in processes)
             {
                 if (!IsParentProcessExist(GetParentProcessId(zombieProcess.Id)))
                 {
