@@ -1,3 +1,4 @@
+![GitHub all releases](https://img.shields.io/github/downloads/Saltant/anchor-patch/total)
 # Patch for Anchor Wallet
 
 This is a fix for the Anchor bug - when wallet processes duplicate on the system and start to load the CPU.
