@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿#pragma warning disable CA1416
+using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;
 
@@ -10,11 +11,10 @@ namespace AnchorPatch.Services
         [return: MarshalAs(UnmanagedType.Bool)]
         private static partial bool SetWindowText(IntPtr hWnd, string lpString);
 
-        Process[] processes;
-        const string PROCESS_NAME = "Anchor Wallet";
-        readonly int maxProcesses = 5;
-        readonly Dictionary<int, Process> anchorProcesses = new();
         readonly ServiceLogger logger;
+        readonly Dictionary<int, Process> anchorProcesses = new();
+        const string PROCESS_NAME = "Anchor Wallet";
+        Process[] processes;
         bool isApplicationRunning;
 
         public PatchService(IHostApplicationLifetime hostApplication) 
@@ -24,58 +24,67 @@ namespace AnchorPatch.Services
             isApplicationRunning = true;
         }
 
-        void OnApplicationStopping()
+        public void Start()
         {
-            isApplicationRunning = false;
+            logger.LogInformation("Start Watching");
+            Task.Run(StartWatching);
         }
 
         void StartWatching()
         {
             while (isApplicationRunning)
             {
-                processes = Process.GetProcessesByName(PROCESS_NAME);
-                if (processes == null)
+                try
                 {
-                    Task.Delay(500).Wait();
-                    continue;
+                    SpinWait.SpinUntil(() => TryGetProcesses(out processes));
+                    if(TryFindMainWindowForChangeTitle(out var mainWindow))
+                        SetWindowText(mainWindow.MainWindowHandle, $"{mainWindow.MainWindowTitle} [Patched]");
+                    if (TryAddActiveProcesses())
+                        EnableExitedEventIfNotEnabled();
+                    if (TryFindExitedProcesses(out var exitedPIDs))
+                    {
+                        exitedPIDs.AsParallel().ForAll(x => 
+                        {
+                            if(anchorProcesses.Remove(x))
+                                logger.LogInformation($"Removed pid '{x}' as it is closed");
+                        });
+                    }
+                    if (TryFindZombieProcesses(out var zombieProcesses))
+                    {
+                        zombieProcesses.AsParallel().ForAll(x => 
+                        { 
+                            x.Kill(true);
+                            logger.LogInformation($"Killed PID '{x.Id}' as he is a zombie");
+                        });
+                    } 
                 }
-                RemoveExitedProcesses();
-                if (anchorProcesses.Count > 0 && !processes.All(x => anchorProcesses.ContainsKey(x.Id)) && processes.Length > maxProcesses)
+                catch (Exception ex)
                 {
-                    KillZombieProcesses();
+                    logger.LogError(ex.Message);
                 }
-                if (!UpdateMainWindowTitleIfNeeded())
+                finally 
                 {
-                    Task.Delay(500).Wait();
-                    continue;
+                    Task.Delay(1000).Wait();
                 }
-                AddActiveProcesses();
-                EnableExitedEventIfNotEnabled();
-                Task.Delay(1000).Wait();
             }
         }
 
-        void RemoveExitedProcesses()
+        bool TryGetProcesses(out Process[] findedProcesses)
         {
-            anchorProcesses.Keys.Where(id => anchorProcesses[id].HasExited).ToList().ForEach(p =>
-            {
-                if (anchorProcesses.Remove(p))
-                {
-                    logger.LogInformation($"Removed exited Anchor process: {p}");
-                }
-            });
+            findedProcesses = Process.GetProcessesByName(PROCESS_NAME);
+            return findedProcesses != null;
         }
 
-        void KillZombieProcesses()
+        bool TryFindExitedProcesses(out IEnumerable<int> exitedPIDs)
         {
-            foreach (var zombieProcess in processes)
-            {
-                if (!IsParentProcessExist(GetParentProcessId(zombieProcess.Id)))
-                {
-                    zombieProcess.Kill(true);
-                    logger.LogInformation($"Killed Zombie Process Id: {zombieProcess.Id}");
-                }
-            }
+            exitedPIDs = anchorProcesses.Keys.Where(id => anchorProcesses[id].HasExited);
+            return exitedPIDs.Any();
+        }
+
+        bool TryFindZombieProcesses(out IEnumerable<Process> zombieProcesses)
+        {
+            zombieProcesses = processes.Where(x => !x.HasExited && !IsParentProcessExist(GetParentProcessId(x.Id)));
+            return zombieProcesses.Any();
         }
 
         bool IsParentProcessExist(int processId)
@@ -86,78 +95,77 @@ namespace AnchorPatch.Services
 
         int GetParentProcessId(int processId)
         {
-#pragma warning disable CA1416 // Validate platform compatibility
+            int parentId = -1;
             using ManagementObjectSearcher searcher = new($"SELECT * FROM Win32_Process WHERE ProcessId = {processId}");
             using ManagementObjectCollection objects = searcher.Get();
             foreach (ManagementObject obj in objects.Cast<ManagementObject>())
             {
-
-                object parentId = obj["ParentProcessId"];
-                if (parentId != null)
-                {
-                    return Convert.ToInt32(parentId);
-                }
+                if (TryGetPropertyParentProcessId(obj, out parentId))
+                    break;
             }
-#pragma warning restore CA1416 // Validate platform compatibility
-
-            logger.LogInformation($"Failed to retrieve parent process ID for process {processId}, => Zombie detected");
-            return -1;
+            if(parentId == -1)
+                logger.LogInformation($"Failed to retrieve parent process for process id: {processId} => Zombie detected");
+            return parentId;
         }
 
-        bool UpdateMainWindowTitleIfNeeded()
+        bool TryGetPropertyParentProcessId(ManagementObject obj, out int parentId)
         {
-            if (processes.Any(x => x.MainWindowHandle != IntPtr.Zero))
-            {
-                var mainWindow = processes.FirstOrDefault(x => x.MainWindowHandle != IntPtr.Zero);
-                if (mainWindow.MainWindowTitle.StartsWith("Anchor") && !mainWindow.MainWindowTitle.Contains("[Patched]"))
-                {
-                    SetWindowText(mainWindow.MainWindowHandle, $"{mainWindow.MainWindowTitle} [Patched]");
-                }
-            }
-            else
-            {
-                return false;
-            }
-
-            return true;
+            parentId = Convert.ToInt32(obj.GetPropertyValue("ParentProcessId"));
+            return parentId != 0;
         }
 
-        void AddActiveProcesses()
+        bool TryFindMainWindowForChangeTitle(out Process mainWindowProcess)
         {
-            foreach (var anchorProcess in processes.Where(x => !x.HasExited))
-            {
-                if(anchorProcesses.Count != maxProcesses)
-                    anchorProcesses.TryAdd(anchorProcess.Id, anchorProcess);
-            }
+            mainWindowProcess = processes.FirstOrDefault(x => x.MainWindowHandle != IntPtr.Zero && x.MainWindowTitle.StartsWith("Anchor") && !x.MainWindowTitle.Contains("[Patched]"));
+            return mainWindowProcess != null;
+        }
+
+        bool TryAddActiveProcesses()
+        {
+            processes.Where(p => !anchorProcesses.ContainsKey(p.Id)).ToList().ForEach(p => anchorProcesses.TryAdd(p.Id, p));
+            return anchorProcesses.Any();
         }
 
         void EnableExitedEventIfNotEnabled()
         {
-            if (anchorProcesses.Count > 0 && !anchorProcesses.Values.First().EnableRaisingEvents)
+            var p = anchorProcesses.Values.Where(x => x.MainWindowHandle != IntPtr.Zero).FirstOrDefault(x => !x.EnableRaisingEvents);
+            if (p != null)
             {
-                anchorProcesses.Values.First().EnableRaisingEvents = true;
-                anchorProcesses.Values.First().Exited += AnchorProcess_Exited;
+                p.EnableRaisingEvents = true;
+                p.Exited += MainAnchorProcess_Exited;
             }
         }
 
-        void AnchorProcess_Exited(object sender, EventArgs e)
+        void MainAnchorProcess_Exited(object sender, EventArgs e)
         {
-            foreach (var anchorProcess in Process.GetProcessesByName(PROCESS_NAME))
+            try
             {
-                anchorProcess.Close();
-                if (!anchorProcess.WaitForExit(TimeSpan.FromSeconds(2)))
-                {
-                    anchorProcess.Kill(true);
-                }
+                logger.LogInformation(TryForceCloseAllAnchorProcesses() ? "All Anchor processes are forcibly closed." : "All Anchor processes are normally closed.");
             }
-            anchorProcesses.Clear();
-            logger.LogInformation("All Anchor process exit.");
+            catch (Exception ex) { logger.LogError(ex.Message); }
+            finally { anchorProcesses.Clear(); }
         }
 
-        public void Start()
+        bool TryForceCloseAllAnchorProcesses()
         {
-            logger.LogInformation("StartWatching");
-            Task.Run(StartWatching);
+            var anchorProcesses = Process.GetProcessesByName(PROCESS_NAME);
+            if (anchorProcesses.Any() && anchorProcesses.All(x => !x.HasExited))
+            {
+                anchorProcesses.Where(x => !x.HasExited).AsParallel().ForAll(ForceClose);
+                return true;
+            }
+            return false;
+        }
+
+        void ForceClose(Process anchorProcess)
+        {
+            if(!anchorProcess.HasExited) anchorProcess.Kill(true);
+        }
+
+        void OnApplicationStopping()
+        {
+            isApplicationRunning = false;
+            logger.LogInformation("Stop Watching");
         }
     }
 }
