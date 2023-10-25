@@ -1,0 +1,10 @@
+sudo: required
+language: csharp
+mono: none
+dotnet: 7.0.1
+solution: AnchorPatch.sln
+script:
+  - cd AnchorPatch
+  - ls
+  - dotnet restore
+  - dotnet build -c Release
