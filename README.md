@@ -33,3 +33,4 @@ The program can be added to the autoloader, having previously set the parameters
 To place the application in Windows autoloader you need to press ```Win+R```, type: ```shell:startup``` and place a shortcut of ```AnchorPatch.exe``` file from the build folder in the opened folder.
 
 Or you can use the installer from the [release section](https://github.com/Saltant/anchor-patch/releases/latest "Latest Releases"), it will automatically install the patch and add it to autorun.
+[Virus Total Report v1.0.1](https://www.virustotal.com/gui/file/b5b930064392eb8cacc00ddf882559e29ded260a02383964d13ec3abb98c52a3?nocache=1 "Virus Total Report v1.0.1")
